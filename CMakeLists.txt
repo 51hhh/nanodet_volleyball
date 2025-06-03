@@ -13,18 +13,26 @@ find_package(yaml-cpp REQUIRED)
 add_executable(nanodet_openvino
     src/main.cpp
     src/Nanodet.cpp
+    camera/hikvision_wrapper.cpp
 )
 
 # 包含目录
 target_include_directories(nanodet_openvino PRIVATE
     include/
+    camera/
+    struct/
+    /opt/MVS/include/           # 添加MVS头文件路径
 )
+
+# 添加hikvision SDK库路径
+link_directories(/opt/MVS/bin)
 
 # 链接库
 target_link_libraries(nanodet_openvino PRIVATE
     openvino::runtime
     ${OpenCV_LIBS}
-    yaml-cpp
+    yaml-cpp                # 添加yaml-cpp库
+    MvCameraControl         # 添加海康MVS库
 )
 
 # 安装规则

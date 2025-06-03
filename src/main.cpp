@@ -6,8 +6,8 @@
 //
 
 #include "Nanodet.h"
-
-
+#include "../camera/hikvision_wrapper.hpp"
+#include "../struct/common_struct.hpp"
 
 /**
  * 图像检测演示
@@ -42,19 +42,26 @@ int webcam_demo(const std::shared_ptr<NanoDet>& detector, int cam_id)
 {
     // 创建一个空的Mat对象用于存储图像
     cv::Mat image;
-    // 打开摄像头设备
-    cv::VideoCapture cap(cam_id);
-    // 定义一个存储检测框的向量
+    // 定义存储检测框的向量
     std::vector<Box> boxes;
+    
+    // 配置摄像头参数
+    s_camera_params params{cam_id, 1920, 1080, 0, 0, 20};
+    
+    // 创建并初始化海康摄像头
+    HikVisionWrapper hik(params);
+    if (!hik.initialize()) {
+        fprintf(stderr, "Failed to initialize Hikvision camera %d\n", cam_id);
+        return -1;
+    }
+
     // 无限循环进行实时检测
     while (true)
     {
         // 从摄像头读取一帧图像
-        bool ret = cap.read(image);
-        // 检查图像读取是否成功
-        if (!ret) {
-            fprintf(stderr, "VideoCapture %d read failed.\n", cam_id);
-            return 0;
+        if (!hik.getFrame(image)) {
+            fprintf(stderr, "Hikvision camera %d get frame failed.\n", cam_id);
+            break;
         }
         // 使用统一的时间统计工具
         auto timer = detector->startTimer("Detect");
@@ -69,6 +76,8 @@ int webcam_demo(const std::shared_ptr<NanoDet>& detector, int cam_id)
         // 清空检测框向量
         boxes.clear();
     }
+    
+    return 0;
 }
 
 /**
