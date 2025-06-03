@@ -576,9 +576,19 @@ Box NanoDet::disPred2Bbox(float* dfl_det, int label, float score, int x, int y, 
  */
 void NanoDet::NMS(std::vector<Box>& boxes_res)
 {
-    // 1. 预过滤：移除低分检测框(score < 0.05)
+    // 1. 预过滤：移除过大检测框(面积超过屏幕50%)、异常长宽比(>2)和低分检测框(score < 0.05)
     Boxes_.erase(std::remove_if(Boxes_.begin(), Boxes_.end(), 
-        [this](const Box& b) { return b.score < 0.05f; }), 
+        [this](const Box& b) { 
+            float box_area = (b.x2 - b.x1) * (b.y2 - b.y1);
+            float screen_area = input_width_ * input_height_;
+            float width = b.x2 - b.x1;
+            float height = b.y2 - b.y1;
+            float ratio1 = width / height;
+            float ratio2 = height / width;
+            return (box_area / screen_area > 0.5f) || 
+                   (ratio1 > 2.0f || ratio2 > 2.0f) || 
+                   (b.score < 0.05f);
+        }), 
         Boxes_.end());
 
     // 2. 按置信度从高到低排序所有检测框
@@ -623,50 +633,84 @@ void NanoDet::NMS(std::vector<Box>& boxes_res)
         return cross_area / union_area;
     };
 
-    // 2. 第一轮过滤：去除低分检测框
-    // 使用构造函数传入的score_threshold_过滤低分框
-    for(size_t i = 0; i < Boxes_.size(); ++i) {
-        if(Boxes_[i].score < score_threshold_) { 
-            remove_flags[i] = true;
+    // 计算形状得分函数 (宽高比接近1的框得分更高)
+    auto shape_score = [](const Box& box) {
+        float width = box.x2 - box.x1;
+        float height = box.y2 - box.y1;
+        float ratio = std::min(width/height, height/width); // 计算宽高比
+        return 0.5f * (1.0f + ratio); // 归一化到0.5-1.0
+    };
+
+    // 1. 计算距离惩罚系数
+    auto distance_penalty = [](const Box& predicted, const Box& current) {
+        // 计算预测框和当前框的中心点距离
+        float pred_cx = (predicted.x1 + predicted.x2) / 2;
+        float pred_cy = (predicted.y1 + predicted.y2) / 2;
+        float curr_cx = (current.x1 + current.x2) / 2;
+        float curr_cy = (current.y1 + current.y2) / 2;
+        float distance = std::hypot(pred_cx - curr_cx, pred_cy - curr_cy);
+        
+        // 计算框对角线长度作为参考距离
+        float box_size = std::hypot(current.x2 - current.x1, current.y2 - current.y1);
+        
+        // 增强惩罚力度: 
+        // 1. 将参考距离从2倍改为1倍框尺寸
+        // 2. 使用平方关系增加惩罚曲线陡峭度
+        float normalized_dist = distance / box_size;  // 1倍框尺寸作为阈值
+        float penalty = 1.0f - std::min(1.0f, normalized_dist * normalized_dist);
+        return std::max(0.0f, penalty);
+    };
+
+    // 2. 计算尺寸惩罚系数(防止全屏检测框)
+    auto size_penalty = [this](const Box& box) {
+        // 计算检测框面积占屏幕面积的比例
+        float box_area = (box.x2 - box.x1) * (box.y2 - box.y1);
+        float screen_area = input_width_ * input_height_;
+        float ratio = box_area / screen_area;
+        
+        // 当检测框超过屏幕面积30%时开始惩罚
+        if (ratio > 0.3f) {
+            // 使用指数衰减函数进行惩罚
+            return expf(-5.0f * (ratio - 0.3f));
+        }
+        return 1.0f;
+    };
+
+    // 3. 寻找综合得分最高的框
+    float max_score = 0;
+    Box best_box;
+    Box predicted_box = trackers.empty() ? Box{0,0,0,0,0,-1} : trackers[0].get_state();
+    
+    for(auto& box : Boxes_) {
+        // 计算综合得分 = 置信度 * 形状得分 * 距离惩罚 * 尺寸惩罚
+        float dist_penalty = trackers.empty() ? 1.0f : distance_penalty(predicted_box, box);
+        float current_score = box.score * shape_score(box) * dist_penalty * size_penalty(box);
+        
+        if(current_score > max_score) {
+            max_score = current_score;
+            best_box = box;
         }
     }
 
-    // 3. NMS处理主循环
-    for(size_t i = 0; i < Boxes_.size(); ++i) {
-        if(remove_flags[i]) continue;
-
-        auto& ibox = Boxes_[i];
-        Box res_box = ibox;
-        // 查找匹配的追踪器，保留track_id
-        for(auto& tracker : trackers) {
-            if(calculate_iou(tracker.get_state(), ibox) > 0.5f) {
-                res_box.track_id = tracker.id;
-                break;
-            }
+    // 3. 更新或创建卡尔曼跟踪器
+    if(max_score > 0) {
+        if(trackers.empty()) {
+            // 创建新跟踪器
+            KalmanTracker tracker(best_box);
+            tracker.id = next_track_id++;
+            trackers.push_back(tracker);
+        } else {
+            // 更新现有跟踪器
+            trackers[0].update(best_box);
         }
-        boxes_res.emplace_back(res_box);
+        best_box.track_id = trackers[0].id;
+        boxes_res.push_back(best_box);
         
-        // 4. 限制最大检测数量
-        // 使用官方默认值100作为最大检测数量
-        const int max_num = 100; // 最大检测数量
-        if(boxes_res.size() >= max_num) {
-            break;
-        }
-
-        // 检查后续所有框与当前框的重叠度
-        // 使用构造函数传入的nms_threshold_判断是否移除重叠框
-        for(size_t j = i + 1; j < Boxes_.size(); ++j) {
-            if(remove_flags[j]) continue;
-
-            auto& jbox = Boxes_[j];
-            if(ibox.label == jbox.label) {
-                float overlap = iou(ibox, jbox);
-                if(overlap >= nms_threshold_) {
-                    remove_flags[j] = true;
-
-                }
-            }
-        }
+        // 预测下一帧位置
+        trackers[0].predict();
+    } else if(!trackers.empty()) {
+        // 无检测框时仅预测
+        trackers[0].predict();
     }
 
 }
