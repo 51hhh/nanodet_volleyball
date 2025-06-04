@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 查找依赖包
 find_package(OpenCV REQUIRED)
 find_package(OpenVINO REQUIRED)
-find_package(yaml-cpp REQUIRED)
+
 
 # 添加可执行文件
 add_executable(nanodet_openvino
@@ -31,7 +31,6 @@ link_directories(/opt/MVS/bin)
 target_link_libraries(nanodet_openvino PRIVATE
     openvino::runtime
     ${OpenCV_LIBS}
-    yaml-cpp                # 添加yaml-cpp库
     MvCameraControl         # 添加海康MVS库
 )
 
