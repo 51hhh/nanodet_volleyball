@@ -67,12 +67,21 @@ int webcam_demo(const std::shared_ptr<NanoDet>& detector, int cam_id)
         auto timer = detector->startTimer("Detect");
         detector->detect(image, boxes);
         detector->update_trackers(image,boxes);
-        detector->draw(image, boxes);
+        // detector->draw(image, boxes);
         printf("%s\n", detector->endTimer(timer).c_str());
-        // 显示检测结果
-        cv::imshow("Nanodet", image);
-        // 等待键盘输入用于控制程序流
-        cv::waitKey(1);
+
+        // // 显示检测结果
+        // cv::imshow("Nanodet", image);
+        // // 等待键盘输入用于控制程序流
+        // cv::waitKey(1);
+
+        // 输出每个检测框的中心坐标
+        for (const auto& box : boxes) {
+            float center_x = (box.x1 + box.x2) / 2;
+            float center_y = (box.y1 + box.y2) / 2;
+            printf("Box center: (%.2f, %.2f)\n", center_x, center_y);
+        }
+        
         // 清空检测框向量
         boxes.clear();
     }
