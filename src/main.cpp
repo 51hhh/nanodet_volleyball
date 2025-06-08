@@ -120,7 +120,28 @@ int video_demo(const std::shared_ptr<NanoDet>& detector, const char* path)
         // 显示检测结果
         cv::imshow("Nanodet", image);
         // 等待键盘输入用于控制程序流
-        cv::waitKey(1);
+        static bool pause = false;
+        int key = cv::waitKey(1);
+        
+        // 空格键切换暂停状态
+        if (key == 32) { // 空格键ASCII码
+            pause = !pause;
+        }
+        
+        // 暂停状态下按任意键移动一帧
+        if (pause) {
+            while (true) {
+                key = cv::waitKey(0);
+                if (key == 32) { // 再次按空格继续
+                    pause = !pause;
+                    break;
+                } else if (key == 27) { // ESC退出
+                    return 0;
+                } else { // 其他键移动一帧
+                    break;
+                }
+            }
+        }
         // 清空检测框向量
         boxes.clear();
     }
